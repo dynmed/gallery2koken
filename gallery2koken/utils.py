@@ -8,8 +8,10 @@ import json
 import re
 import httplib
 import os
+import sys
 import mimetypes
 import time
+import io
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -155,17 +157,25 @@ class Gallery2(object):
             title = albums.get("album.title.%s" % album_id_num)
             summary = albums.get("album.summary.%s" % album_id_num)
             name_id = albums.get("album.name.%s" % album_id_num)
-            logging.info("title: %s" % title)
-            logging.info("summary: %s" % summary)
             # get the images for this album
             images = self.fetch_album_images(name_id)
-            pretty_print(images)
             # skip the root-level gallery album which doesn't contain any photos
             if images.get("album.caption") == "Gallery":
                 continue
             # create the new album instance in Koken
-            koken.create_album(name = title, description = summary)
-
+            koken_album = koken.create_album(name = title, description = summary)
+            if koken_album is None:
+                continue
+            # upload the photos to Koken
+            for photo_id in [key for key in images.keys()
+                             if key.startswith("image.name")]:
+                photo_id_num = re.search("\d+$", photo_id).group()
+                filename = images.get("image.title.%s" % photo_id_num)
+                image = self.fetch_image(images.get("image.name.%s" % photo_id_num))
+                koken_photo = koken.upload_photo_bytes(io.BytesIO(image.content),
+                                                       filename)
+                # move the photo to the new album
+                koken.move_photo_to_album(koken_photo, koken_album)
 
 class Koken(object):
     def __init__(self, url):
@@ -237,7 +247,6 @@ class Koken(object):
         filename = os.path.basename(real_path)
         files = {
             "file": (filename, open(real_path, "rb"), mimetypes.guess_type(filename)[0])
-            # "file": ("blob", open(real_path, "rb"), "application/octet-stream")
         }
         data = {
             "name": filename,
@@ -258,7 +267,34 @@ class Koken(object):
         # something went wrong with the request
         return None
 
-    def move_photo_to_album(self, album_id, photo_id):
+    def upload_photo_bytes(self, bytesio, filename):
+        self.login()
+
+        # upload the photo
+        url = "%s/api.php?/content" % self.url
+        files = {
+            "file": (filename, bytesio, mimetypes.guess_type(filename)[0])
+        }
+        data = {
+            "name": filename,
+            "visibility": "public",
+            "max_download": "none",
+            "license": "all",
+            "upload_session_start": int(time.time())
+        }
+        # don't follow the redirect so we can parse out the album number from
+        # the Location header
+        response = self.session.post(url, data = data, files = files,
+                                     headers = self.headers, allow_redirects = False)
+
+        # make sure the album was successfully created
+        if response.status_code == 302 and "Location" in response.headers:
+            return re.search("\d+$", response.headers.get("Location")).group(0)
+
+        # something went wrong with the request
+        return None
+
+    def move_photo_to_album(self, photo_id, album_id):
         self.login()
 
         url = "%s/api.php?/albums/%s/content/%s" % (self.url, album_id, photo_id)
