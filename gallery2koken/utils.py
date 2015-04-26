@@ -177,6 +177,9 @@ class Gallery2(object):
                 # move the photo to the new album
                 koken.move_photo_to_album(koken_photo, koken_album)
 
+        # clear the system cache so the new albums show up
+        koken.clear_system_caches()
+
 class Koken(object):
     def __init__(self, url):
         self.url = url
@@ -299,6 +302,16 @@ class Koken(object):
 
         url = "%s/api.php?/albums/%s/content/%s" % (self.url, album_id, photo_id)
         response = self.session.post(url, headers = self.headers)
+
+    # emulate clicking the "Clear System Caches" button in Settings > System
+    def clear_system_caches(self):
+        self.login()
+
+        url = "%s/api.php?/update/migrate/schema" % (self.url)
+        self.session.post(url, headers = self.headers)
+
+        url = "%s/api.php?/system/clear_caches" % (self.url)
+        self.session.post(url, headers = self.headers)
 
 def pretty_print(obj):
     print json.dumps(obj, indent=2, separators=(',', ': '))
