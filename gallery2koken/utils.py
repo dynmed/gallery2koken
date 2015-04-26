@@ -7,6 +7,9 @@ import config
 import json
 import re
 import httplib
+import os
+import mimetypes
+import time
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -17,6 +20,9 @@ def parse_args():
     parser.add_argument("--album-name", help="Album name to run command on")
     parser.add_argument("--create-koken-album", action="store_true", default=False,
                         help="Create new album in Koken")
+    parser.add_argument("--upload-koken-photo", help="Upload a photo to Koken")
+    parser.add_argument("--move-photo-to-album", action="store_true",
+                        default=False, help="Upload a photo to Koken")
     parser.add_argument("--gallery-local", action="store_true", default=False,
                         help="Send requests to Gallery 2 server via localhost")
     parser.add_argument("--koken-local", action="store_true", default=False,
@@ -33,13 +39,16 @@ def parse_args():
         )
     return args
 
-def setup_http_debug():
-    httplib.HTTPConnection.debuglevel = 1
+def setup_logging(debug = False):
     logging.basicConfig()
-    logging.getLogger().setLevel(logging.DEBUG)
-    requests_log = logging.getLogger("requests.packages.urllib3")
-    requests_log.setLevel(logging.DEBUG)
-    requests_log.propagate = True
+    if debug:
+        httplib.HTTPConnection.debuglevel = 1
+        logging.getLogger().setLevel(logging.DEBUG)
+        requests_log = logging.getLogger("requests.packages.urllib3")
+        requests_log.setLevel(logging.DEBUG)
+        requests_log.propagate = True
+    else:
+        logging.getLogger().setLevel(logging.INFO)
 
 class Gallery2(object):
     def __init__(self, url):
@@ -133,9 +142,11 @@ class Gallery2(object):
 
     # main wrapper function to iterate through Gallery 2 albums and create corresponding
     # albums in Koken
-    def migrate_albums(self):
+    def migrate_albums(self, koken):
         if self.auth_token is None:
             self.login()
+
+        koken.login()
 
         albums = self.fetch_albums()
         for album_id in [key for key in albums.keys() if key.startswith("album.name")]:
@@ -144,11 +155,17 @@ class Gallery2(object):
             title = albums.get("album.title.%s" % album_id_num)
             summary = albums.get("album.summary.%s" % album_id_num)
             name_id = albums.get("album.name.%s" % album_id_num)
+            logging.info("title: %s" % title)
+            logging.info("summary: %s" % summary)
             # get the images for this album
             images = self.fetch_album_images(name_id)
-            
             pretty_print(images)
-            print ""
+            # skip the root-level gallery album which doesn't contain any photos
+            if images.get("album.caption") == "Gallery":
+                continue
+            # create the new album instance in Koken
+            koken.create_album(name = title, description = summary)
+
 
 class Koken(object):
     def __init__(self, url):
@@ -173,15 +190,79 @@ class Koken(object):
         url = "%s/api.php?/sessions" % self.url
         self.session.post(url, data = data, headers = self.headers)
 
-    def create_album(self, album_name):
+    def create_album(self, name, description = None):
         self.login()
         url = "%s/api.php?/albums" % self.url
         data = {
-            "title": album_name,
+            "title": name,
             "album_type": 0, # normal album
             "visibility": "public"
         }
-        self.session.post(url, data = data, headers = self.headers)
+        # don't follow the redirect so we can parse out the album number from
+        # the Location header
+        response = self.session.post(url, data = data, headers = self.headers,
+                                     allow_redirects = False)
+
+        # make sure the album was successfully created
+        if response.status_code == 302 and "Location" in response.headers:
+            album_id = re.search("\d+$", response.headers.get("Location")).group(0)
+
+        # something went wrong with the request
+        if album_id is None:
+            return None
+
+        if description is not None:
+            url = "%s/api.php?/albums/%s" % (self.url, album_id)
+            data = {
+                "summary": description,
+                "description": description,
+                "_method": "PUT"
+            }
+            self.session.post(url, data = data, headers = self.headers)
+
+        return album_id
+
+    def upload_photo(self, image_path):
+        self.login()
+
+        # attempt to resolve the filename relative to this script
+        dirname = os.path.dirname(__file__)
+        real_path = os.path.realpath(os.path.join(dirname, image_path))
+        if not os.path.isfile(real_path):
+            logging.error("file not found: %s" % real_path)
+            return None
+
+        # upload the photo
+        url = "%s/api.php?/content" % self.url
+        filename = os.path.basename(real_path)
+        files = {
+            "file": (filename, open(real_path, "rb"), mimetypes.guess_type(filename)[0])
+            # "file": ("blob", open(real_path, "rb"), "application/octet-stream")
+        }
+        data = {
+            "name": filename,
+            "visibility": "public",
+            "max_download": "none",
+            "license": "all",
+            "upload_session_start": int(time.time())
+        }
+        # don't follow the redirect so we can parse out the album number from
+        # the Location header
+        response = self.session.post(url, data = data, files = files,
+                                     headers = self.headers, allow_redirects = False)
+
+        # make sure the album was successfully created
+        if response.status_code == 302 and "Location" in response.headers:
+            return re.search("\d+$", response.headers.get("Location")).group(0)
+
+        # something went wrong with the request
+        return None
+
+    def move_photo_to_album(self, album_id, photo_id):
+        self.login()
+
+        url = "%s/api.php?/albums/%s/content/%s" % (self.url, album_id, photo_id)
+        response = self.session.post(url, headers = self.headers)
 
 def pretty_print(obj):
     print json.dumps(obj, indent=2, separators=(',', ': '))

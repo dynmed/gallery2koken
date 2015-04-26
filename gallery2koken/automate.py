@@ -6,7 +6,9 @@ def main(args):
     koken = utils.Koken(config.KOKEN_BASE_URL)
 
     if args.http_debug:
-        utils.setup_http_debug()
+        utils.setup_logging(debug = True)
+    else:
+        utils.setup_logging(debug = False)
 
     if args.command == "login":
         gallery2.login()
@@ -21,10 +23,14 @@ def main(args):
         gallery2.fetch_album_image_files(args.album_name)
 
     if args.command == "migrate-albums":
-        gallery2.migrate_albums()
+        gallery2.migrate_albums(koken)
 
     if args.create_koken_album:
-        koken.create_album(args.album_name)
+        print "created album: %s" % koken.create_album(args.album_name)
+
+    if args.upload_koken_photo:
+        print "uploaded photo: %s" % koken.upload_photo(args.upload_koken_photo)
+
 
 if __name__ == "__main__":
     config.ARGS = utils.parse_args()
