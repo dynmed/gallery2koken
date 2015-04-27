@@ -124,6 +124,10 @@ class Gallery2(object):
             requests.post(self.url, data = data, headers = self.headers)
         )
         self.base_url = response.get("baseurl")
+        if self.base_url is None:
+            logging.info("No base_url found for album: %s" % album_name)
+            return None
+
         # modify some attributes if we are accessing the Gallery via localhost
         if config.ARGS.gallery_local:
             parts = urlparse.urlparse(self.base_url)
@@ -159,12 +163,16 @@ class Gallery2(object):
             name_id = albums.get("album.name.%s" % album_id_num)
             # get the images for this album
             images = self.fetch_album_images(name_id)
+            if images is None:
+                logging.error("unable to fetch album images for name_id: %s" % name_id)
+                continue
             # skip the root-level gallery album which doesn't contain any photos
             if images.get("album.caption") == "Gallery":
                 continue
             # create the new album instance in Koken
             koken_album = koken.create_album(name = title, description = summary)
             if koken_album is None:
+                logging.error("unable to create album: %s" % title)
                 continue
             # upload the photos to Koken
             for photo_id in [key for key in images.keys()
@@ -224,7 +232,7 @@ class Koken(object):
         if album_id is None:
             return None
 
-        if description is not None:
+        if description:
             url = "%s/api.php?/albums/%s" % (self.url, album_id)
             data = {
                 "summary": description,
