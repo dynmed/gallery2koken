@@ -7,14 +7,13 @@ import json
 import re
 import httplib
 import os
-import sys
 import mimetypes
 import time
 import io
 
 import config
 
-def parse_args(args = sys.argv):
+def parse_args(args = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--command",
                         choices=["login", "fetch-albums", "fetch-album-images",
