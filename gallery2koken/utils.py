@@ -3,7 +3,6 @@ import requests
 import logging
 import base64
 import urlparse
-import config
 import json
 import re
 import httplib
@@ -13,7 +12,9 @@ import mimetypes
 import time
 import io
 
-def parse_args():
+import config
+
+def parse_args(args = sys.argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--command",
                         choices=["login", "fetch-albums", "fetch-album-images",
@@ -31,7 +32,7 @@ def parse_args():
                         help="Send requests to Koken server via localhost")
     parser.add_argument("--http-debug", action="store_true", default=False,
                         help="Extra HTTP debugging output")
-    args = parser.parse_args()
+    args = parser.parse_args(args)
     if ((args.command in ["fetch-album-images", "fetch-album-image-files"] or
          args.create_koken_album) and
         not args.album_name):
@@ -40,6 +41,9 @@ def parse_args():
             "also require --album-name be specified."
         )
     return args
+
+# create stub for CLI args if we are calling into the module from outside automate.py
+config.ARGS = parse_args([])
 
 def setup_logging(debug = False):
     logging.basicConfig()
