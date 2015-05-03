@@ -22,6 +22,8 @@ def parse_args(args = None):
     parser.add_argument("--album-name", help="Album name to run command on")
     parser.add_argument("--create-koken-album", action="store_true", default=False,
                         help="Create new album in Koken")
+    parser.add_argument("--reset-koken-album-date",
+                        help="Reset the Published date according to the first photo capture date")
     parser.add_argument("--upload-koken-photo", help="Upload a photo to Koken")
     parser.add_argument("--move-photo-to-album", action="store_true",
                         default=False, help="Upload a photo to Koken")
@@ -323,6 +325,19 @@ class Koken(object):
 
         url = "%s/api.php?/system/clear_caches" % (self.url)
         self.session.post(url, headers = self.headers)
+
+    def reset_album_date(self, album_id):
+        self.login()
+
+        # get the capture date of the first photo in the album
+        url = "%s/api.php?/albums/%s/content/limit:1" % (self.url, album_id)
+        resp = json.loads(self.session.get(url, headers = self.headers).text)
+        capture_date = resp["content"][0]["captured_on"]["timestamp"]
+
+        # post this date back as the published date for the album
+        url = "%s/api.php?/albums/%s" % (self.url, album_id)
+        data = { "published_on": capture_date, "_method": "PUT" }
+        self.session.post(url, data = data, headers = self.headers)        
 
 def pretty_print(obj):
     print json.dumps(obj, indent=2, separators=(',', ': '))

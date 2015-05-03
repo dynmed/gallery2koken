@@ -31,6 +31,8 @@ def main(args):
     if args.upload_koken_photo:
         print "uploaded photo: %s" % koken.upload_photo(args.upload_koken_photo)
 
+    if args.reset_koken_album_date:
+        koken.reset_album_date(args.reset_koken_album_date)
 
 if __name__ == "__main__":
     config.ARGS = utils.parse_args()
