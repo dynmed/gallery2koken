@@ -1,3 +1,12 @@
+"""
+This module wraps the APIs for Gallery 2 [1] and Koken [2] and provides migration
+functionality from the former to the latter.
+[1] http://codex.galleryproject.org/Gallery_Remote:Protocol
+[2] http://koken.me/ (API not documented)
+
+Copyright (c) 2015 Dynamic Media
+Licensed under the MIT License. See LICENSE for more details.
+"""
 import argparse
 import requests
 import logging
@@ -14,32 +23,50 @@ import io
 import config
 
 def parse_args(args = None):
+    """
+    Parse a string of command line arguments and return a Namespace containing
+    the specified options and values.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--command",
-                        choices=["login", "fetch-albums", "fetch-album-images",
-                                 "fetch-album-image-files", "migrate-albums"],
-                        help="Specify command to run")
-    parser.add_argument("--album-name", help="Album name to run command on")
-    parser.add_argument("--create-koken-album", action="store_true", default=False,
+    # main purpose of the tool: migrate Gallery albums to Koken
+    parser.add_argument("--gallery-migrate-albums-to-koken", action="store_true",
+                        default=False, help="Migrate all Gallery albums to Koken")
+    # individual commands that may not be super useful in a Gallery to Koken migration
+    # but which demonstrate functionality of the two wrapper classes.
+    parser.add_argument("--gallery-login", action="store_true", default=False,
+                        help="Authenticate to Gallery with username and password")
+    parser.add_argument("--gallery-fetch-albums", action="store_true", default=False,
+                        help="Fetch all albums in the Gallery instance")
+    parser.add_argument("--gallery-fetch-album-images", action="store_true", default=False,
+                        help="Fetch info about all images in a Gallery album")
+    parser.add_argument("--gallery-fetch-album-image-files", action="store_true",
+                        default=False, help="Fetch all image files from a Gallery album")
+    parser.add_argument("--koken-create-album", action="store_true", default=False,
                         help="Create new album in Koken")
-    parser.add_argument("--reset-koken-album-date",
+    parser.add_argument("--koken-reset-album-date",
                         help="Reset the Published date according to the first photo capture date")
-    parser.add_argument("--upload-koken-photo", help="Upload a photo to Koken")
+    parser.add_argument("--koken-upload-photo", help="Upload a photo to Koken")
     parser.add_argument("--move-photo-to-album", action="store_true",
                         default=False, help="Upload a photo to Koken")
+    # some commands require an ablum name to be specified (enforced below)
+    parser.add_argument("--album-name", help="Album name to run command on")
+    # optimizations for when you can run gallery2koken locally on the server
     parser.add_argument("--gallery-local", action="store_true", default=False,
                         help="Send requests to Gallery 2 server via localhost")
     parser.add_argument("--koken-local", action="store_true", default=False,
                         help="Send requests to Koken server via localhost")
+    # extra HTTP debugging output
     parser.add_argument("--http-debug", action="store_true", default=False,
                         help="Extra HTTP debugging output")
     args = parser.parse_args(args)
-    if ((args.command in ["fetch-album-images", "fetch-album-image-files"] or
-         args.create_koken_album) and
+    # enforce any conditional dependencies in the arguments
+    if ((args.gallery_fetch_album_images or
+         args.gallery_fetch_album_image_files or
+         args.koken_create_album) and
         not args.album_name):
         parser.error(
-            "--fetch-album-images, --fetch-album-image-files, and --create-koken-album " +
-            "also require --album-name be specified."
+            "--gallery-fetch-album-images, --gallery-fetch-album-image-files" +
+            ", and --create-koken-album also require --album-name be specified."
         )
     return args
 
@@ -55,9 +82,13 @@ def setup_logging(debug = False):
         requests_log.setLevel(logging.DEBUG)
         requests_log.propagate = True
     else:
-        logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger().setLevel(logging.ERROR)
 
 class Gallery2(object):
+    """
+    Wrapper for a Gallery2 instance that exposes methods to read info about the
+    albums and photos contained within.
+    """
     def __init__(self, url):
         self.url = url
         # container for extra request headers
@@ -73,6 +104,10 @@ class Gallery2(object):
             self.headers = {"Host": parts.netloc}
 
     def parse_response(self, response):
+        """
+        Parse a GalleryRemote response, which is formatted like a Java properties
+        file, and return a dict containing the name-value pairs.
+        """
         response_obj = {}
         for line in response.text.splitlines():
             # skip lines that don't contain name-value pairs
@@ -84,6 +119,10 @@ class Gallery2(object):
         return response_obj
 
     def login(self):
+        """
+        Log in to the Gallery instance and store the auth token for subsequent
+        requests.
+        """
         if self.auth_token is not None:
             return
 
@@ -100,6 +139,10 @@ class Gallery2(object):
         self.auth_token = response.get("auth_token")
 
     def fetch_albums(self):
+        """
+        Return a dict containing all albums in the Gallery instance. Wraps call to:
+        http://codex.galleryproject.org/Gallery_Remote:Protocol#fetch-albums
+        """
         if self.auth_token is None:
             self.login()
 
@@ -114,6 +157,10 @@ class Gallery2(object):
         )
 
     def fetch_album_images(self, album_name):
+        """
+        Return a dict containing all images in an album. Wraps call to:
+        http://codex.galleryproject.org/Gallery_Remote:Protocol#fetch-album-images
+        """
         if self.auth_token is None:
             self.login()
 
@@ -130,7 +177,7 @@ class Gallery2(object):
         )
         self.base_url = response.get("baseurl")
         if self.base_url is None:
-            logging.info("No base_url found for album: %s" % album_name)
+            logging.error("No base_url found for album: %s" % album_name)
             return None
 
         # modify some attributes if we are accessing the Gallery via localhost
@@ -140,6 +187,7 @@ class Gallery2(object):
         return response
 
     def fetch_album_image_files(self, album_name):
+        """Download all the images from a Gallery album."""
         album_images = self.fetch_album_images(album_name)
         for image_id in [key for key in album_images.keys() if key.startswith("image.name")]:
             image_id_num = re.search("\d+$", image_id).group()
@@ -149,11 +197,14 @@ class Gallery2(object):
                     fp.write(chunk)
 
     def fetch_image(self, image_id):
+        """Return a requests.Response object for a Gallery image"""
         return requests.get("%s%s" % (self.base_url, image_id), headers = self.headers)
 
-    # main wrapper function to iterate through Gallery 2 albums and create corresponding
-    # albums in Koken
     def migrate_albums(self, koken):
+        """
+        Main wrapper function to iterate through Gallery 2 albums and create corresponding
+        albums in Koken.
+        """
         if self.auth_token is None:
             self.login()
 
@@ -194,6 +245,12 @@ class Gallery2(object):
         koken.clear_system_caches()
 
 class Koken(object):
+    """
+    Wrapper for a Koken instance that exposes methods to create albums, upload
+    images, and modify album metadata. These methods call into the undocumented
+    Koken API (as of 2015-05-08) which have been reverse engineered from the web
+    interface.
+    """
     def __init__(self, url):
         self.url = url
         self.session = requests.Session()
@@ -206,6 +263,10 @@ class Koken(object):
             self.headers["Host"] = parts.netloc
 
     def login(self):
+        """
+        Log in to the Koken instance and create a persistent session to use for
+        subsequent requests.
+        """
         if self.session.cookies.get("koken_session_ci") is not None:
             return
 
@@ -217,6 +278,7 @@ class Koken(object):
         self.session.post(url, data = data, headers = self.headers)
 
     def create_album(self, name, description = None):
+        """Create a new album with the specified name and (optional) description."""
         self.login()
         url = "%s/api.php?/albums" % self.url
         data = {
@@ -249,6 +311,7 @@ class Koken(object):
         return album_id
 
     def upload_photo(self, image_path):
+        """Upload an image to Koken by passing in a local image file path."""
         self.login()
 
         # attempt to resolve the filename relative to this script
@@ -284,6 +347,9 @@ class Koken(object):
         return None
 
     def upload_photo_bytes(self, bytesio, filename):
+        """
+        Upload an image to Koken by passing in an io.BytesIO wrapped image file.
+        """
         self.login()
 
         # upload the photo
@@ -311,13 +377,14 @@ class Koken(object):
         return None
 
     def move_photo_to_album(self, photo_id, album_id):
+        """Move an existing Koken photo into an existing Koken album.""" 
         self.login()
 
         url = "%s/api.php?/albums/%s/content/%s" % (self.url, album_id, photo_id)
         response = self.session.post(url, headers = self.headers)
 
-    # emulate clicking the "Clear System Caches" button in Settings > System
     def clear_system_caches(self):
+        """Emulate clicking the "Clear System Caches" button in Settings > System."""
         self.login()
 
         url = "%s/api.php?/update/migrate/schema" % (self.url)
@@ -327,6 +394,10 @@ class Koken(object):
         self.session.post(url, headers = self.headers)
 
     def reset_album_date(self, album_id):
+        """
+        Update the published date for an album by inspecting the EXIF metadata
+        for the first album image and using the capture date as the published date.
+        """
         self.login()
 
         # get the capture date of the first photo in the album
@@ -340,4 +411,5 @@ class Koken(object):
         self.session.post(url, data = data, headers = self.headers)        
 
 def pretty_print(obj):
+    """Output human-readable JSON representation of a dict."""
     print json.dumps(obj, indent=2, separators=(',', ': '))
