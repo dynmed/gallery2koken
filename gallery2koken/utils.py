@@ -46,8 +46,6 @@ def parse_args(args = None):
     parser.add_argument("--koken-reset-album-date",
                         help="Reset the Published date according to the first photo capture date")
     parser.add_argument("--koken-upload-photo", help="Upload a photo to Koken")
-    parser.add_argument("--move-photo-to-album", action="store_true",
-                        default=False, help="Upload a photo to Koken")
     # some commands require an ablum name to be specified (enforced below)
     parser.add_argument("--album-name", help="Album name to run command on")
     # optimizations for when you can run gallery2koken locally on the server
